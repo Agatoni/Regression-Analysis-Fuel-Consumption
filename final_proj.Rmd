@@ -1,0 +1,263 @@
+---
+title: "Regression Analysis: Fuel Efficiency in Automobiles" 
+author: "Sarah Agatoni"
+output: html_document
+---
+
+<br> 
+
+### Summary
+
+This project uses data from the 1974 Motor Trend US magazine (comprising fuel consumption and 10 aspects of automobile design and performance for 32 automobiles) to:
+
+- explore the relationship between various variables and fuel consumption
+
+- compare the fuel efficiency of automatic versus manual transmission cars 
+
+<br> 
+
+**Environment**
+```{r message=FALSE, warning=FALSE}
+if (!require("pacman")) install.packages("pacman"); library(pacman)
+pacman::p_load(dplyr, corrplot,  ggplot2, ggthemr, plotly)
+```
+
+<br>
+
+### Data 
+
+*load data*
+```{r data}
+data("mtcars")
+```
+
+<br>
+
+*view first few rows*
+```{r head}
+head(mtcars, 4)
+```
+<br>
+
+The data has 32 observations of the following variables:
+
+- $mpg$: fuel consumption (miles/gallon)
+- $cyl$: number of cylinders
+- $disp$: displacement
+- $hp$: gross horsepower
+- $drat$: rear axle ratio
+- $wt$: weight (1000 lbs)
+- $qsec$: quarter mile time
+- $vs$: engine shape (0 = v-shaped; 1 = manual)
+- $am$: transmission (0 = automatic; 1 = manual)
+- $gear$: number of forward gears 
+- $carb$: number of carburetors 
+
+<br> 
+
+*check for missingness*
+```{r na_check}
+sum(is.na(mtcars))
+```
+
+<br>
+
+*transforming numeric variables to factors*
+```{r to_factor, message=FALSE}
+mydata <- mtcars %>% mutate_at(c("cyl", "vs", "am", "gear", "carb"), as.factor)
+```
+
+<br> 
+
+
+### Exploratory Analysis
+
+
+<br>
+
+**Fig 1: Correlation Plot**
+```{r correlation}
+corrplot.mixed(cor(mtcars), order="hclust", tl.col="black")
+```
+
+**Observations**: 
+
+- Fuel consumption ($mpg$) is highly correlated with automobile weight ($wt$), horsepower ($hp$), number of cylinders ($cyl$) and displacement ($disp$). These are potential predictors.   
+
+- These potential predictors are themselves correlated. The best model will not contain all of the potential predictors.
+
+- Transmission type ($am$) is moderately correlated with the rear axel ratio ($drat$) and number of gears ($gear$). So, we might need to eliminate these variables to limit variance inflation due to collinearity.
+
+<br> 
+
+
+**Fig 2: Box plot: Fuel by Transmission**
+```{r}
+ggplot(mydata, aes(x=am, y=mpg, fill = am)) + 
+  geom_boxplot() + 
+  labs(x = "Type", y = "Miles per Gallon") +
+  scale_fill_discrete(labels = c("Automatic", "Manual"))
+```
+
+**Observation**: Manual cars in the sample have better fuel efficiency i.e. travel farther on comparable fuel than automatic cars.
+
+<br>
+
+*how much farther?*
+```{r}
+auto <- mydata[mydata$am == 0,];man <- mydata[mydata$am == 1,]
+mean(man$mpg) - mean(auto$mpg)
+```
+
+<br> 
+
+*is this difference unique to our sample?*
+```{r}
+t.test(man$mpg, auto$mpg, alternative = c("two.sided"))
+```
+
+**Observations**:
+
+- Everything else equal, manual cars *probably* have a fuel efficiency advantage over automatic cars
+
+- However, 'everything else' need not be equal. As observed from $Fig. 1$, factors such as weight, horsepower and number of cylinders may better explain differences in fuel consumption. 
+
+<br> 
+
+**Fig 3: Box plot: Fuel by Transmission|Number of Cylinders **
+
+```{r boxplot, cache=TRUE}
+ggthemr("dust")
+
+bp <- ggplot(mydata, aes(x=am, y=mpg, fill = am)) + 
+    geom_boxplot() +
+    facet_wrap(. ~ cyl, labeller = "label_both")
+
+ggplotly(bp)
+```
+
+**Observation**: As the number of cylinder increases, the difference in fuel consumption between automatic and manual transmission cars shrinks.
+
+<br>
+
+### Modeling 
+
+The goal is to gauge the effect of transmission type on fuel consumption after accounting for other predictors. And to investigate the best overall predictors of fuel consumption.
+
+<br>
+The model with only $am$ as a predictor is the baseline. 
+```{r}
+baseline <- lm(mpg ~ am, data = mydata)
+summary(baseline)
+```
+**Observations**:
+
+- In this model, transmission type is a significant predictor but it explains only 34% of the variance in fuel consumption
+
+- If you knew nothing else about a car, you may *sometimes* guess correctly that a manual car will have better fuel efficiency than an automatic car, but you would almost certainly be wrong about the magnitude of the difference.
+
+<br> 
+
+
+**Variable Selection**
+
+We use stepwise regression as a preliminary way of identifying important variables. 
+
+```{r}
+full <- lm(mpg ~., mydata)
+select <- MASS::stepAIC(full, direction = "both", trace = FALSE)
+```
+The stepwise method identifies $cyl$, $hp$, $wt$ and $am$ as potential predictors. 
+
+<br>
+
+**Model Building**
+
+```{r}
+summary(select)$adj.r.squared
+```
+
+A model with these variables is much more informative (50% more explanatory power) but we still need to decide what combination of these predictors yields the best model.
+
+<br>
+
+To do so I fit a (partial) second order model and eliminate insignificant variables. This yields:
+```{r}
+chosen <- lm(mpg ~ hp + wt + I(hp^2) + I(wt^2), data = mydata)
+summary(chosen)
+```
+This model has fairly high explanatory power (87.5%) with few, all-significant predictors. 
+
+<br>
+
+**NB** Adding transmission type does not improve the model's R-squared, in fact the model is penalized for having an extraneous variable.
+```{r}
+summary(lm(mpg ~ am + hp + wt + I(hp^2) + I(wt^2), data = mydata))$adj.r.squared
+```
+This implies that **knowing a car's weight and horsepower yields the most information about its fuel consumption**.
+
+<br>
+
+#### Diagnostics
+
+Before proceeding, we check that the assumptions for linear regression aren't grossly violated. 
+
+```{r}
+par(mfrow=c(2,2)) 
+plot(chosen)
+par(mfrow=c(1,1))
+```
+
+<br>
+
+*Zero Mean and Equal Variance of Errors* 
+
+The `Residuals vs Fitted` shows residuals with a roughly zero mean zero and more or less equal spread, suggesting an unbiased model. 
+
+<br>
+
+*Normality of Errors* 
+
+The points in the top-right plot seem to have deviations from normality (they do not lie on the diagonal line). We perform a secondary check for normality: 
+
+```{r}
+shapiro.test(summary(chosen)$resid)
+```
+The null hypothesis of this test is that the errors are normally distributed. With a p-value of 0.09, we fail to reject the null i.e. we find no evidence that normality is violated.
+
+<br> 
+
+*Influential Outliers*
+
+The `Residuals vs Leverage` indicate the possibility of leverage points. To gauge influence, we look at the variables with Cook's Distance > 4/n
+
+```{r}
+which(cooks.distance(chosen) > 4/nrow(mydata))
+```
+However, these values do not appear to have been recorded in error and deleting them doesn't significantly improve the model. So we stick to the chosen model. 
+
+<br>
+
+
+### Conclusion 
+
+```{r}
+chosen
+```
+
+<br>
+
+**Final Observations**:
+
+- All things equal, a manual car will have better fuel efficiency than an automatic one. 
+
+- Given the information we have, the best predictor of fuel efficiency is weight. 
+
+- A car's horsepower, displacement and number of cylinders provide additional information. But seeing as they are all highly correlated, it is more or less the same information. Horsepower is just slightly more informative.
+
+- Both weight and horsepower affect fuel efficiency in the opposite direction i.e. heavier cars and those with high horsepower consume more fuel.
+
+
+
+__________________________________________________________END__________________________________________________________
+
